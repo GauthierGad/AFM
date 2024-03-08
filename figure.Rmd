@@ -1,0 +1,491 @@
+---
+title: "Untitled"
+author: "GauthierGad"
+date: "2024-01-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+  
+data <- read_excel(file_paths[86])
+subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+           `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]`= as.numeric(`Young's Modulus [Pa]`))
+subset_data$`X Position` <- subset_data$`X Position`*1e6
+    subset_data$`Y Position` <- subset_data$`Y Position`*1e6
+
+q_size <-10
+
+#Define window
+Wnd <- owin(c(-30, 30), c(-30, 30))
+
+numeric_df <- subset_data %>%
+  select_if(is.numeric)
+
+ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+#summary(ppp)
+
+nx <- 6
+ny <- 6
+plot(ppp)
+
+test <- quadratcount(ppp, nx = nx, ny = ny)
+plot(test)
+mid <- ((abs(-25) + 25)/nx) / 2
+center_quadrat <- -seq(from= -25 + mid, to = 25 - mid , length.out = nx)
+colnames(test) <- rev(center_quadrat)
+rownames(test) <- center_quadrat
+test <- as.data.frame(test)
+
+plot <- ggplot() +
+  geom_bin2d(data = test,
+             aes(x = x,
+                 y = y),
+             binwidth = c(q_size, 
+                          q_size)) +
+  geom_point(data = test,
+             aes(x = x,
+               y = y)) +
+  scale_size_continuous(
+    range = c(3, 10),
+    breaks = seq(min(test$Freq), max(test$Freq), by=1)
+  ) +  # Adjust the size range as needed
+  labs(title = "Scatterplot with Size Based on Freq",
+       x = "X-axis Label",
+       y = "Y-axis Label")
+
+plot <- ggplot() +
+  geom_bin2d(data = numeric_df,
+             aes(x = `X Position`, 
+                 y = `Y Position`),
+             binwidth = c(q_size, 
+                          q_size)) +
+    geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`)) +
+  labs(x = "X (µm)",
+       y = "Y (µm)") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+  coord_fixed() + 
+    xlim(c(-32.5, 32.5)) +
+    ylim(c(-32.5, 32.5))
+plot
+#ggsave("count_.svg", plot)
+```
+Get YM modulus and their spatial distribution
+
+```{r}
+YM_spatial <- list()
+subset_datalist <- list()
+
+# Loop over your file paths
+for (i in seq_along(file_paths)) {
+  if (i %in% c(48, 49, 77, 78, 81, 82)){
+    if (i %in% c(48, 49)){
+      title <- c(paste("Epithelium", i))
+    }
+    else if (i %in% c(77, 78)){
+      title <- c(paste("Cancer", i))
+    }
+    else {
+      title <- c(paste("Stroma", i))
+    }
+    summary_df <- data.frame()
+    data <- readxl::read_excel(file_paths[i])
+    subset_data <- data %>%
+      mutate(`X Position` = as.numeric(`X Position`),
+             `Y Position` = as.numeric(`Y Position`),
+             `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+    subset_data <- subset_data %>%
+      filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+    subset_data <- subset_data %>%
+      filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+    subset_data$`X Position` <- as.numeric(subset_data$`X Position`)*1e6
+    subset_data$`Y Position` <- as.numeric(subset_data$`Y Position`)*1e6
+    subset_data$log_Youngs_Modulus <- log(subset_data$`Young's Modulus [Pa]`)
+    
+  subset_datalist[[i]] <- subset_data  
+  YM_spatial[[i]] <- ggplot(subset_datalist[[i]], aes(x=`X Position`, y=`Y Position`, fill=`log_Youngs_Modulus`)) +
+  geom_tile() +
+  scale_fill_gradient(low="white", high="steelblue", limits=c(0, 9)) + 
+  theme_minimal() +
+  labs(fill="log(Young Modulus)")+
+  coord_sf(xlim = c(-25, 25), ylim = c(-25, 25))+
+  
+  ggtitle(title)
+  }
+}
+
+grid_arrange_shared_legend(YM_spatial[[48]],
+                           YM_spatial[[81]],
+                           YM_spatial[[77]],
+                           YM_spatial[[49]],
+                           YM_spatial[[82]],
+                           YM_spatial[[78]],
+                           ncol=3, nrow = 2,  position='right')
+```
+
+````{r}
+plot_map <- list()
+plot_frequency <- list()
+plot_density <- list()
+avg_distance_map <- c()
+
+for (i in seq_along(file_paths)) {
+  summary_df <- data.frame()
+  data <- readxl::read_excel(file_paths[i])
+  #data <- data %>%
+    #select(-which(duplicated(colnames(data))))
+  subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+            `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+  subset_data <- subset_data %>%
+    filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+  subset_data <- subset_data %>%
+    filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+  
+  q_size <- 1e-5
+  
+    #Define window
+  Wnd <- owin(c(-30e-6, 30e-6), c(-30e-6, 30e-6))
+  
+  numeric_df <- subset_data %>%
+    select_if(is.numeric)
+  
+  ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+  #summary(ppp)
+  
+  nx <- 6
+  ny <- 6
+  plot(ppp)
+  
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  plot(test)
+  mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+  center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = `X Position`, 
+                   y = `Y Position`),
+               binwidth = c(q_size, 
+                            q_size)) +
+      geom_point(data = subset_data,
+               aes(x = `X Position`, 
+                   y = `Y Position`)) +
+    labs(x = "X (m)",
+         y = "Y (m)") +
+    scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+    coord_fixed() + 
+      xlim(c(-3.25e-5, 3.25e-5)) +
+      ylim(c(-3.25e-5, 3.25e-5))
+  
+  #Define window
+  Wnd <- owin(c(-25e-6, 25e-6), c(-25e-6, 25e-6))
+  
+  numeric_df <- subset_data %>%
+    select_if(is.numeric)
+  print(numeric_df)
+  
+  ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+  #summary(ppp)
+  #plot(ppp)
+  ppp_neighbours <- nndist(ppp, k=1)
+
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  #plot(test)
+  mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+  center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  plot_map[[i]] <- local({
+    i <- i
+    plot_1 <- ggplot() +
+    geom_bin2d(data = subset_data,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = summary_df,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  plot_frequency[[i]] <- local({
+    i <- i
+    plot_2 <- ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = subset_data,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  # Plot the density maps
+  plot_density[[i]] <- local({
+    i <- i 
+    plot_3 <- plot(distmap(ppp), sigma = bw.diggle)#, col=viridis(100), breaks= seq(0, 50e-6, length.out=101))
+  })
+  #get average distance of nearest neighbours 
+  avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+}
+
+  #return list of plots
+  #plot_map[length(plot_map) + 1] <- plot_1
+  #plot_density[length(plot_density) + 1] <- plot_2
+  #plot_density <- append(plot_density, plot_3)
+
+# Strings to find
+strings_to_find <- c("tumeur/epithelium", "tissu_sain", "metastase", "tumeur/stroma")
+# List to store found strings
+tissue_types <- c()
+for (tissue in excel_files) {
+  string_found <- FALSE
+  for (string in strings_to_find) {
+    if (grepl(string, tissue)) {
+      # If found, add it to the found_strings list
+      tissue_types <- c(tissue_types, string)
+      string_found <- TRUE
+    }
+  }
+  if (!string_found){
+    tissue_types <- c(tissue_types, "Others")
+  }
+}
+
+#plot(map1, col=viridis(100), breaks=seq(global_min, global_max, length.out=101))
+#legend(legend=seq(0, 50, by=10), fill=viridis(6))
+````
+
+```{r}
+
+for (i in seq_along(file_paths)) {
+  if (i %in% c(1, 13, 18, 23)){
+    summary_df <- data.frame()
+    data <- readxl::read_excel(file_paths[i])
+    #data <- data %>%
+      #select(-which(duplicated(colnames(data))))
+    subset_data <- data %>%
+      mutate(`X Position` = as.numeric(`X Position`),
+              `Y Position` = as.numeric(`Y Position`),
+             `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+    subset_data <- subset_data %>%
+      filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+    subset_data <- subset_data %>%
+      filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+    subset_data$`X Position` <- subset_data$`X Position`*1e6
+    subset_data$`Y Position` <- subset_data$`Y Position`*1e6
+    
+    q_size <- 10
+    
+      #Define window
+    Wnd <- owin(c(-30, 30), c(-30, 30))
+    
+    numeric_df <- subset_data %>%
+      select_if(is.numeric)
+    
+    ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+   
+    #get average distance of nearest neighbours 
+    avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+    }
+}
+
+
+````
+
+
+```{r}
+
+# Load necessary libraries
+library(spatstat)
+library(rasterVis)
+library(gridExtra)
+
+# Initialize lists
+ppp_objects <- list()
+counts_measure_list <- list()
+avg_distance_map <- c()
+
+# Loop over your file paths
+for (i in seq_along(file_paths)) {
+  if (i %in% c(1, 13, 18, 23)){
+    if (i %in% c(1, 13, 23)){
+      title <- "Tumeur"
+    }
+    else {
+      title <- "Epithelium tumoral"
+    }
+    summary_df <- data.frame()
+    data <- readxl::read_excel(file_paths[i])
+    subset_data <- data %>%
+      mutate(`X Position` = as.numeric(`X Position`),
+             `Y Position` = as.numeric(`Y Position`),
+             `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+    subset_data <- subset_data %>%
+      filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+    subset_data <- subset_data %>%
+      filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+    subset_data$`X Position` <- subset_data$`X Position`*1e6
+    subset_data$`Y Position` <- subset_data$`Y Position`*1e6
+    
+    # Define window
+    Wnd <- owin(c(-30, 30), c(-30, 30))
+    
+    numeric_df <- subset_data %>%
+      select_if(is.numeric)
+    
+    ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+   
+    # Store ppp object in list
+    ppp_objects[[i]] <- ppp
+    
+    plot <- ggplot() +
+  geom_bin2d(data = numeric_df,
+             aes(x = `X Position`, 
+                 y = `Y Position`),
+             binwidth = c(q_size, 
+                          q_size)) +
+    geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`)) +
+  labs(x = "X (µm)",
+       y = "Y (µm)") +
+  ggtitle(title) +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+  coord_fixed() + 
+    xlim(c(-32.5, 32.5)) +
+    ylim(c(-32.5, 32.5))
+    
+    counts_measure_list[[i]] <- plot
+    
+    #get average distance of nearest neighbours 
+    avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+  }
+}
+
+grid_arrange_shared_legend(counts_measure_list[[1]],
+                           counts_measure_list[[13]],
+                           counts_measure_list[[18]],
+                           counts_measure_list[[23]], 
+                           ncol=2, nrow = 2,  position='right')
+```
+
+
+```{r}
+dist1 <- distmap(ppp_objects[[1]])
+dist2 <- distmap(ppp_objects[[13]]) 
+dist3 <- distmap(ppp_objects[[18]])
+dist4 <- distmap (ppp_objects[[23]])
+
+# Find the global maximum distance to set the same color scale
+max_distance <- 50
+
+## Define the layout for your plots
+#layout(matrix(1:4, 1, 4))
+
+#plot1 <- plot(dist1, main="Distance Map 1", col=inferno(15), zlim=c(0, max_distance))
+#plot2 <- plot(dist2, main="Distance Map 2", col=inferno(15), zlim=c(0, max_distance))
+#plot3 <- plot(dist3, main="Distance Map 3", col=inferno(15), zlim=c(0, max_distance))
+#plot4 <- plot(dist4, main="Distance Map 4", col=inferno(15), zlim=c(0, max_distance))
+
+plot1 <- ggplot(as.data.frame(dist1), aes(x=x, y=y, fill=value)) + 
+         geom_tile() + 
+         scale_fill_gradientn(colors = RColorBrewer::brewer.pal(5, "YlGnBu"), limits=c(0, max_distance)) +
+         theme_minimal() +
+         ggtitle("Tumeur patient1")
+plot2 <- ggplot(as.data.frame(dist2), aes(x=x, y=y, fill=value)) + 
+         geom_tile() + 
+         scale_fill_gradientn(colors=RColorBrewer::brewer.pal(5, "YlGnBu"), limits=c(0, max_distance)) +
+         theme_minimal() +
+         ggtitle("Tumeur patient10")
+plot3 <- ggplot(as.data.frame(dist3), aes(x=x, y=y, fill=value)) + 
+         geom_tile() + 
+         scale_fill_gradientn(colors=RColorBrewer::brewer.pal(5, "YlGnBu"), limits=c(0, max_distance)) +
+         theme_minimal() +
+         ggtitle("Epithelium tumoral patient12")
+plot4 <- ggplot(as.data.frame(dist4), aes(x=x, y=y, fill=value)) + 
+         geom_tile() + 
+         scale_fill_gradientn(colors=RColorBrewer::brewer.pal(5, "YlGnBu"), limits=c(0, max_distance)) +
+         theme_minimal() +
+         ggtitle("Tumeur patient13")
+
+grid.arrange(plot1, plot2, plot3, plot4, ncol=2)
+
+# Create a grid of plots with shared axes
+grid_arrange_shared_legend(plot1, plot2, plot3, plot4, ncol=2, nrow = 2,  position='bottom')
+
+```
+
+```{r}
+data <- read_excel(file_paths[83])
+subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+           `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]`= as.numeric(`Young's Modulus [Pa]`))
+subset_data <- subset_data %>%
+      filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+    subset_data <- subset_data %>%
+      filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+    subset_data$`X Position` <- subset_data$`X Position`*1e6
+    subset_data$`Y Position` <- subset_data$`Y Position`*1e6
+
+ggplot(subset_data, aes(x=`X Position`, y=`Y Position`, fill=`Young's Modulus [Pa]`)) +
+  geom_tile() +
+  scale_fill_distiller(palette = "BuPu", direction=1) + 
+  theme_minimal() +
+  labs(fill="Young Modulus")+
+  coord_sf(xlim = c(-25, 25), ylim = c(-25, 25))
+```
+
+

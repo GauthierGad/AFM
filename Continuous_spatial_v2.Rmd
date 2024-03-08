@@ -1,0 +1,178 @@
+---
+title: "Continuous_spatial_v2"
+author: "GauthierGad"
+date: "2024-01-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r kriging}
+library(gstat)
+library(isdas)
+library(plotly)
+library(spatstat)
+```
+
+
+```{r kriging}
+rm(list = ls())
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data_threshold"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+# Create a vector to store file paths for which variogram fitting failed
+failed_files <- c()
+
+for (file_path in file_paths) {
+  success <- TRUE
+  print(file_path)
+  data <- read_excel(file_path)
+  subset_data <- data %>%
+      filter(!is.na(`Young's Modulus [Pa]`)) %>%
+      mutate(`X Position` = as.numeric(`X Position`),
+             `Y Position` = as.numeric(`Y Position`))
+  
+  trend_data <- mutate(subset_data, 
+                      #X2 = `X Position`^2, 
+                      #XY = `X Position` * `Y Position`,
+                      #Y2 = `Y Position`^2,
+                      Y = `Y Position`,
+                      X = `X Position`
+                      )
+  
+  map.trend2 <- lm(formula = `Young's Modulus [Pa]` ~ 1, data = trend_data) #X2 + Y2 + XY + X + Y, data = trend_data)
+summary(map.trend2)
+
+  # Convert numeric_df to an sf object
+  coordinates <- subset_data[, c("X Position", "Y Position")]
+  sf_object <- st_as_sf(coordinates, coords = c("X Position", "Y Position"))
+  sf_object <- matrix(st_coordinates(sf_object), ncol=2)
+  sf_object <- st_multipoint(sf_object, dim = "XY")
+  
+  map.sf <- trend_data %>%
+    st_as_sf(coords = c("X Position", "Y Position"))
+  names(map.sf)[names(map.sf) == "Young's Modulus [Pa]"] <- "YoungMod"
+  
+  X.p <- seq(from = -2.5e-5, to = 2.5e-5, by = 1e-6)
+  Y.p <- seq(from = -2.5e-5, to = 2.5e-5, by = 1e-6)
+  df.p <- expand.grid(X = X.p, Y = Y.p)
+  
+  df.p <- mutate(df.p, X2 = X^2, 
+                 XY = X * Y, 
+                 Y2 = Y^2)
+  
+  df.sf <- df.p %>%
+    st_as_sf(coords = c("X", "Y"),
+             remove = FALSE)
+  
+  variogram_young <- gstat::variogram( YoungMod ~ 1,
+                               data = map.sf,
+                               cutoff = 8e-6)
+  
+  ggplot(data = variogram_young, 
+         aes(x = dist, 
+             y = gamma)) +
+    geom_point() + 
+    geom_text(aes(label = np), 
+              # Nudge the labels away from the points
+              nudge_y = -1000) +
+    xlab("Distance") +
+    ylab("Semivariance")
+  
+  
+  map.sf$e <- map.trend2$residuals
+  
+  #tryCatch({
+    # Temporarily turn warnings into errors
+  #  options(warn = 2)
+    variogram_young.t <- fit.variogram(variogram_young, model = vgm("Sph", "Exp", "Gau", "Wav", "Lin"), fit.method = 1)
+   # }, warning = function(w) {
+  #    print(paste("Warning in fitting variogram for file:", file_path))
+  #    failed_files <- c(failed_files, file_path)
+  #    print(w)
+  #    success <- FALSE  # Set the flag to FALSE if variogram fitting fails
+  #    next
+  #  })
+  #print(success)
+  
+  # Reset the warning behavior to the default
+  options(warn = 0)
+  
+  # If variogram fitting fails skip to the next iteration of the loop. If not, continue
+  #if (!success) {
+    #next
+  #}
+  
+  gamma.t <- variogramLine(variogram_young.t, maxdist = max(variogram_young$dist))
+  
+  g <- ggplot(data = variogram_young,
+         aes(x = dist, 
+             y = gamma)) +
+    geom_point(size = 3) + 
+    geom_line(data = gamma.t,
+              aes(x = dist, 
+                  y = gamma)) +
+    xlab("Distance") + 
+    ylab("Semivariance")
+  
+  print(g)
+  
+  # Young.kriged <- krige(YoungMod ~ 1,
+  #                   map.sf, 
+  #                   df.sf, 
+  #                   variogram_young.t)
+  # 
+  # Young.km <- matrix(data = Young.kriged$var1.pred,
+  #                nrow = 50,
+  #                ncol = 50, 
+  #                byrow = TRUE)
+  # 
+  # Young.sm <- matrix(data = Young.kriged$var1.var,
+  #                nrow = 50,
+  #                ncol = 50, 
+  #                byrow = TRUE)
+  # 
+  # Young.km.plot <- plot_ly(x = ~X.p,
+  #                      y = ~Y.p, 
+  #                      z = ~Young.km, 
+  #                      type = "surface", 
+  #                      colors = "YlOrRd") %>% 
+  #   layout(scene = list(aspectmode = "manual", 
+  #                       aspectratio = list(x = 1,
+  #                                          y = 1,
+  #                                          z = 1)))
+  # print(Young.km.plot)
+  # 
+  # Young.sm.plot <- plot_ly(x = ~X.p, 
+  #                      y = ~Y.p,
+  #                      z = ~sqrt(Young.sm), 
+  #                      type = "surface", 
+  #                      colors = "YlOrRd") %>% 
+  #   layout(scene = list(aspectmode = "manual",
+  #                       aspectratio = list(x = 1, 
+  #                                          y = 1, 
+  #                                          z = 1)))
+  # print(Young.sm.plot)
+  }
+}
+```

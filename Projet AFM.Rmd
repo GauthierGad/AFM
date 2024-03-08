@@ -1,0 +1,92 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(gridExtra)
+library(MASS)
+
+data <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+```
+
+```{r}
+unique_patients <- unique(data$`Numéro Patient AFM`)
+
+for (patient in unique_patients) {
+  data_per_patient <- data %>%
+    filter(`Numéro Patient AFM` == patient)
+  boxplot_width <- 3 * length(unique(data_per_patient$Tissu))
+  boxplot <- ggplot(data_per_patient, aes(x = Tissu, y = `Log Data`)) +
+    geom_boxplot(aes(fill = Tissu), width = boxplot_width) +
+    #geom_jitter(aes(color = Tissu), width = 0.2, height = 0) +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(title = paste("Patient", data_per_patient$`Numéro Patient AFM`), x = "Tissu", y = "Log Data") +
+    scale_fill_manual(values = c("Epithelium" = "red", "Muscle" = "green", "Tumeur" = "blue", "Sain" = "purple")) +
+    scale_color_manual(values = c("Epithelium" = "red", "Muscle" = "green", "Tumeur" = "blue", "Sain" = "purple")) +
+    guides(fill = "none", color = "none") +
+    coord_cartesian(clip = "off")
+  print(boxplot)
+}
+```
+
+```{r}
+# Histogram
+column_name <- "Log Data"
+ggplot(data, aes(x = data[[column_name]])) +
+  geom_histogram(binwidth = 0.2, fill = "lightblue", color = "black", alpha = 0.7, aes(y = ..density..)) +
+  geom_density(color = "blue") +
+  labs(title = paste("Density of", column_name),
+       x = column_name, y = "Density") +
+  theme_minimal()
+```
+```{r}
+
+# Define model formula
+#formula <- your_response_variable ~ covariate1 + covariate2 + (1 | random_group_variable)
+colnames(data) <- c("Data", "LogData", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation", "Muci", "Emboles", "Infiltr", "Stade", "KRAS", "NRAS", "RAS", "BRAF", "RAS+BRAF", "Microsatellite")
+#Remove negative values from the dataframe
+filtered_data <- data %>%
+  filter(`LogData` >= 0)
+```
+GLMMPQL: Intra and inter patient variability
+
+```{r}
+DE_filtered_data <- filtered_data %>%
+  filter(`Tissu` == "tissu_sain epithelium" )
+
+# Intra-patient variability : (Patient fixed effect, map = random effect)
+DE_IntraP_model <- glmmPQL( LogData ~ Patient , random = ~1 | Map , family = Gamma(link = "log"), data = DE_filtered_data)
+DE_InterP_model <- glmmPQL( LogData ~1,  random = list(Map = ~1, Patient = ~1), family = Gamma(link = "log"), data = DE_filtered_data)
+
+ProxE_filtered_data <- filtered_data %>%
+  filter(`Tissu` == "tissu_sain_proxi epithelium" )
+
+ProxE_IntraP_model <- glmmPQL( LogData ~ Patient , random = ~1 | Map , family = Gamma(link = "log"), data = ProxE_filtered_data)
+ProxE_InterP_model <- glmmPQL( LogData ~1,  random = list(Map = ~1, Patient = ~1), family = Gamma(link = "log"), data = ProxE_filtered_data)
+
+#summary(DE_IntraP_model)
+```
+
+
+```{r}
+test_filtered_data <- filtered_data %>%
+    filter(`Tissu` == c("tumeur epithelium", "tissu_sain epithelium" ))
+
+test <- glmmPQL( LogData ~ Tissu,  random = c(Patient = ~1, Map = ~1), family = Gamma(link = "log"), data = test_filtered_data)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

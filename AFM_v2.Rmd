@@ -1,0 +1,1227 @@
+---
+title: "AFM_v2"
+author: "GauthierGad"
+date: "2023-12-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is the 2nd version of the spatial code.
+
+```{r}
+library(tidyverse)
+library(isdas)
+library(sf)
+library(readxl)
+library(spatstat)
+library(lme4)
+library(glmmTMB)
+library(DHARMa)
+```
+
+Initiate data 
+
+```{r}
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data/"
+#path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data_threshold/"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+```
+
+#MAP COVERAGE
+
+1)Separate maps in (nx, ny) blocs
+
+```{r}
+
+nx <- 6
+ny <- 6
+
+plot_map <- list()
+plot_frequency <- list()
+plot_density <- list()
+avg_distance_map <- c()
+
+for (i in seq_along(file_paths)) {
+  summary_df <- data.frame()
+  data <- readxl::read_excel(file_paths[i])
+  #data <- data %>%
+    #select(-which(duplicated(colnames(data))))
+  subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+            `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+  subset_data <- subset_data %>%
+    filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+  subset_data <- subset_data %>%
+    filter(`X Position` > -25e-6, `X Position` < 25e-6, `Y Position` > -25e-6, `Y Position` < 25e-6)
+  
+  q_size <- 1e-5
+  
+  #Define window
+  Wnd <- owin(c(-25e-6, 25e-6), c(-25e-6, 25e-6))
+  
+  numeric_df <- subset_data %>%
+    select_if(is.numeric)
+  print(numeric_df)
+  
+  ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+  #summary(ppp)
+  #plot(ppp)
+  ppp_neighbours <- nndist(ppp, k=1)
+
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  #plot(test)
+  mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+  center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  plot_map[[i]] <- local({
+    i <- i
+    plot_1 <- ggplot() +
+    geom_bin2d(data = subset_data,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = summary_df,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  plot_frequency[[i]] <- local({
+    i <- i
+    plot_2 <- ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = subset_data,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  # Plot the density maps
+  plot_density[[i]] <- local({
+    i <- i 
+    plot_3 <- plot(distmap(ppp), sigma = bw.diggle)
+  })
+  #get average distance of nearest neighbours 
+  avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+}
+
+  #return list of plots
+  #plot_map[length(plot_map) + 1] <- plot_1
+  #plot_density[length(plot_density) + 1] <- plot_2
+  #plot_density <- append(plot_density, plot_3)
+
+# Strings to find
+strings_to_find <- c("tumeur/epithelium", "tissu_sain", "metastase", "tumeur/stroma")
+# List to store found strings
+tissue_types <- c()
+for (tissue in excel_files) {
+  string_found <- FALSE
+  for (string in strings_to_find) {
+    if (grepl(string, tissue)) {
+      # If found, add it to the found_strings list
+      tissue_types <- c(tissue_types, string)
+      string_found <- TRUE
+    }
+  }
+  if (!string_found){
+    tissue_types <- c(tissue_types, "Others")
+  }
+}
+
+t <- data.frame(avg_distance_map * 1e6, tissue_types)
+colnames(t) <- c("Avg_neighbour_distance", "Tissue_type")
+
+h_general <- ggplot(t, aes(x = Avg_neighbour_distance, fill = Tissue_type)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 color = "black",
+                 position = "identity",  # Overlap the histograms
+                 alpha = 0.2,  # Make histograms semi-transparent
+                 breaks = seq(min(t$Avg_neighbour_distance), max(t$Avg_neighbour_distance) + 1, by = 0.9)) +
+  geom_density(aes(y= after_stat(density)),
+               alpha = 0.2) +
+  labs(title = "Histogram",
+       x = "Averaged neighbours distance",
+       y = "Density") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Set1")  # Use a color palette for the fill colors
+
+print(h_general)
+```
+Remove maps if averaged neighbours distance is too high (map coverage is too low).
+A arbitrary threshold is being used.
+
+```{r}
+THRESHOLD <- 8
+deleted_maps <- c()
+idx_to_remove <- c()
+for (i in seq_along(t$Avg_neighbour_distance)) {
+  if (t$Avg_neighbour_distance[i] > THRESHOLD) {
+    deleted_maps <- c(deleted_maps, file_paths[i])
+    idx_to_remove <- c(idx_to_remove, i)
+  }
+}
+
+file_names_left <- file_names[-idx_to_remove]
+file_path_left <- file_paths[-idx_to_remove]
+```
+
+Preprocessing ==> Python script 
+DISTRIBUTION DES DATA
+1) Par tissu
+2) Par patients (different maps)
+
+```{r}
+data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data_threshold.xlsx")
+
+colnames(data_all) <- c("Data", "LogData", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation", "Muci", "Emboles", "Infiltr", "Stade", "KRAS", "NRAS", "RAS", "BRAF", "RAS+BRAF", "Microsatellite")
+#Remove negative values from the dataframe
+filtered_data <- data_all %>%
+  filter(`LogData` >= 0)
+
+ggplot(filtered_data, aes(x = Data)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 30) +
+  labs(title = "Histogram of data by tissu subtype",
+       x = "Data",
+       y = "Frequency",
+       subtitle = "Young modulus (Pa)") +
+  scale_x_continuous(limits = c(0, 3000)) +
+  facet_wrap(~Tissu, scales = "free") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+Check the distribution
+```{r}
+library(fitdistrplus)
+
+data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data_threshold.xlsx")
+descdist(data_all$`Log Data`, discrete = FALSE)
+plot(fitdist(data_all$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == "tissu_sain epithelium" )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == c("tissu_sain_proxi", "tissu_sain_proxi epithelium") )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == c("tumeur epithelium") )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == c("tumeur stroma") )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == c("tumeur") )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+
+filtered_data <- data_all %>%
+  filter(`Tissu` == c("tumeur epithelium", "tumeur", "tumeur stroma") )
+descdist(filtered_data$`Log Data`, discrete = FALSE)
+plot(fitdist(filtered_data$`Log Data`,distr="norm"))
+```
+
+Histogram of raw data per subtypes
+
+```{r}
+ggplot(filtered_data, aes(x = Data)) +
+     geom_histogram(position = "identity", alpha = 0.7, bins = 30) +
+     labs(title = "Histogram of Data by Tissu Subtype",
+          x = "Data",
+          y = "Frequency") +
+  scale_x_continuous(limits = c(0, 3000)) +
+     facet_wrap(~Tissu, scales = "free") +
+     theme_minimal()
+```
+
+```{r}
+# Install and load the required package
+if (!requireNamespace("robustbase", quietly = TRUE)) {
+  install.packages("robustbase")
+}
+library(robustbase)
+
+# Function to remove outliers using modified Z-score
+remove_outliers <- function(df, column_name, threshold = 2) {
+  # Calculate the median and MAD (Median Absolute Deviation)
+  median_val <- median(df[[column_name]])
+  mad <- mad(df[[column_name]])
+
+  # Calculate the modified Z-score
+  df$modified_z_score <- 0.6745 * (df[[column_name]] - median_val) / mad
+
+  # Identify and remove outliers based on the threshold
+  outliers <- df[abs(df$modified_z_score) > threshold, ]
+  df_no_outliers <- df[abs(df$modified_z_score) <= threshold, ]
+
+  # Remove the temporary 'modified_z_score' column
+  df_no_outliers <- df_no_outliers[, !(names(df_no_outliers) %in% c("modified_z_score"))]
+
+  return(list(df_no_outliers, outliers))
+}
+```
+
+```{r}
+# Initialize an empty dataframe to store the results
+results <- data.frame()
+
+#data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+data_all <- read.table("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all-data.txt", header = TRUE, sep = "\t", encoding = "latin1")
+
+map_thresh <- c("P1-Tu-M1", "P1-Tu-M2", "P1-Tu-M3",
+                "P13-Tu-M3",
+                "P15-MeE-M1",
+                "P2-ES-M1", "P2-ES-M2", "P2-MuS-M1", "P2-MuS-M2", "P2-MaS-M1", "P2-MaS-M2", "P2-Tu-M1", "P2-Tu-M2", "P2-Tu-M3", "P2-Tu-M4", "P2-Tu-M5",
+"P20-Tu-M4", 
+"P3-ES-M1", "P3-MuS-M1", "P3-Tu-M1", "P3-Tu-M2",
+"P4-ES-M1", "P4-StT-M2",
+"P5-ES-M2")
+
+test_intra <- c()
+test_inter <- c()
+
+#colnames(data_all) <- c("Data", "LogData", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation", "Muci", "Emboles", "Infiltr", "Stade", "KRAS", "NRAS", "RAS", "BRAF", "RAS+BRAF", "Microsatellite")
+
+#Remove negative values from the dataframe
+filtered_data <- data_all %>%
+  filter(`Log.data` >= 0, 
+  !MAP %in% map_thresh)
+
+
+# List of families and link functions to test
+families <- list(gaussian = c("identity", "log", "sqrt"), 
+                 Gamma = c("identity", "log", "inverse")
+                )
+
+DE_filtered_data <- filtered_data %>%
+  filter(Tissu == "tumeur stroma")
+
+#DE_filtered_data_new <- remove_outliers(df = DE_filtered_data, column_name = "Data", threshold = 2)[[1]]
+
+results_list = list()
+
+# Loop over each family
+for(family in names(families)){
+  print(family)
+  
+  # Loop over each link function for the current family
+  for(link in families[[family]]){
+    print(link)
+
+    # Model without random effects
+    DE_InterP_model <- glmer(Data ~ 1 + (1|Patient/Map), family = get(family)(link = link), data = DE_filtered_data)
+    
+    print("Model fitted !")
+    
+    simulationOutput <- simulateResiduals(fittedModel = DE_InterP_model, plot = T)
+    
+    # Test uniformity of the residuals
+    test <- testUniformity(simulationOutput)
+    
+    # Store the test statistic and p-value in the results list
+    results_list[[paste(family, link, sep = "_")]] <- list(test$statistic, test$p.value)
+  }
+}
+    #resid_sim <- simulateResiduals(DE_InterP_model)
+    #plot(resid_sim)
+    # Perform the KS test
+    #ks_test <- ks.test(resid(DE_model), test_name)
+    
+    # Store the results in the dataframe
+    #results <- rbind(results, data.frame(Family = family, Link = link, D = ks_test$statistic, p.value = ks_test$p.value))
+
+
+# Print the results
+#print(results)
+
+```
+
+```{r}
+library(DHARMa)
+library(MASS)
+
+# Initialize an empty dataframe to store the results
+results <- data.frame()
+
+#data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+data_all <- read.table("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all-data.txt", header = TRUE, sep = "\t", encoding = "latin1")
+
+map_thresh <- c("P1-Tu-M1", "P1-Tu-M2", "P1-Tu-M3",
+                "P13-Tu-M3",
+                "P15-MeE-M1",
+                "P2-ES-M1", "P2-ES-M2", "P2-MuS-M1", "P2-MuS-M2", "P2-MaS-M1", "P2-MaS-M2", "P2-Tu-M1", "P2-Tu-M2", "P2-Tu-M3", "P2-Tu-M4", "P2-Tu-M5",
+"P20-Tu-M4", 
+"P3-ES-M1", "P3-MuS-M1", "P3-Tu-M1", "P3-Tu-M2",
+"P4-ES-M1", "P4-StT-M2",
+"P5-ES-M2")
+
+test_intra <- c()
+test_inter <- c()
+
+#fit a model with the Gaussian adaptative quadrature - node = 10
+#DE_IntraP_model <- glmer(Data ~ Tissu + (1 | Patient) + (1 | Map) + (1 | Map:Tissu), family = Gamma('log'), data = DE_filtered_data, nAGQ = 1)
+
+#Remove negative values from the dataframe
+filtered_data <- data_all %>%
+  filter(`Log.data` >= 0,
+  !MAP %in% map_thresh)
+DE_filtered_data <- filtered_data
+
+
+DE_InterP_model <- glmer(Data ~ Sexe + Localisation + Stade + RAS.BRAF + Composante.mucineuse + Microsatellite + KRAS.exon.2 + Infiltration.perinerveuse. + Emboles.. + (1 | MAP), family = Gamma(link = 'log'), data = DE_filtered_data)
+
+simulationOutput <- simulateResiduals(fittedModel = DE_InterP_model, plot = T, quantreg=T)
+summary(DE_InterP_model)
+
+#QQ Plot + test
+plot(simulationOutput)
+
+#test outliers
+testOutliers(simulationOutput)
+
+#Residual vs predictor
+plotResiduals(simulationOutput, form = DE_filtered_data$Patient)
+testQuantiles(simulationOutput)
+
+#test dispersion
+testDispersion(simulationOutput, type = "DHARMa")
+
+#Heteroscedasticity means that there is a systematic dependency of the dispersion / variance on another variable in the model.
+testCategorical(simulationOutput, catPred =DE_filtered_data$Patient)
+
+print(testUniformity(simulationOutput))
+
+performance::check_model(DE_InterP_model)
+
+# Create a density plot with a different color per Patient
+ggplot(DE_filtered_data_new, aes(x = Data, fill = factor(Patient))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_discrete(name = "Patient") +
+  labs(x = "Data", y = "Density")+ xlim(0,3000)
+```
+
+Utilisation de mes données = celles de Guillaume + les nouvelles + avec le threshold en z-score par MAP.
+
+```{r}
+# Initialize an empty dataframe to store the results
+results <- data.frame()
+
+data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+
+map_thresh <- c("P1-Tu-M1", "P1-Tu-M2", "P1-Tu-M3",
+                "P13-Tu-M3",
+                "P15-MeE-M1",
+                "P2-ES-M1", "P2-ES-M2", "P2-MuS-M1", "P2-MuS-M2", "P2-MaS-M1", "P2-MaS-M2", "P2-Tu-M1", "P2-Tu-M2", "P2-Tu-M3", "P2-Tu-M4", "P2-Tu-M5",
+"P20-Tu-M4", 
+"P3-ES-M1", "P3-MuS-M1", "P3-Tu-M1", "P3-Tu-M2",
+"P4-ES-M1", "P4-StT-M2",
+"P5-ES-M2")
+
+test_intra <- c()
+test_inter <- c()
+
+#fit a model with the Gaussian adaptative quadrature - node = 10
+#DE_IntraP_model <- glmer(Data ~ Tissu + (1 | Patient) + (1 | Map) + (1 | Map:Tissu), family = Gamma('log'), data = DE_filtered_data, nAGQ = 1)
+
+#Remove negative values from the dataframe
+filtered_data <- data_all %>%
+  filter(`Log Data` >= 0,
+  !Map %in% map_thresh)
+#DE_filtered_data <- filtered_data
+DE_filtered_data <- filtered_data %>%
+  filter(Tissu == "tumeur stroma")
+
+colnames(DE_filtered_data) <- c("Data", "Log Data", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation",
+                      "Composante.muci", "Emboles", "Infiltration.perinerveuse", "Stade", "KRAS", "NRAS",
+                      "RAS", "BRAF", "RAS.BRAF", "Microsatellite")
+
+DE_InterP_model <- glmmTMB(Data ~  Sexe + Stade + Composante.muci + Microsatellite + Map + (1 | Patient),
+                         #family= tweedie(link='log'), data = DE_filtered_data)
+                         family = Gamma(link = 'log'), data = DE_filtered_data)
+
+DE_IntraP_model <- glmmTMB(Data ~  Sexe + Stade + Composante.muci + Microsatellite + Patient + (1 | Map),
+                         family = Gamma(link = 'log'), data = DE_filtered_data)
+
+simulationOutput <- simulateResiduals(fittedModel = DE_InterP_model, plot = T, quantreg=T)
+summary(DE_InterP_model)
+
+#QQ Plot + test
+plot(simulationOutput)
+
+#test outliers
+testOutliers(simulationOutput)
+
+#Residual vs predictor
+plotResiduals(simulationOutput, form = DE_filtered_data$Patient)
+testQuantiles(simulationOutput)
+
+#test dispersion
+testDispersion(simulationOutput, type = "DHARMa")
+
+#Heteroscedasticity means that there is a systematic dependency of the dispersion / variance on another variable in the model.
+testCategorical(simulationOutput, catPred =DE_filtered_data$Patient)
+
+print(testUniformity(simulationOutput))
+
+performance::check_model(DE_InterP_model)
+
+# Create a density plot with a different color per Patient
+ggplot(DE_filtered_data, aes(x = Data, fill = factor(Patient))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_discrete(name = "Patient") +
+  labs(x = "Data", y = "Density")+ xlim(0,3000)
+
+```
+
+On teste en filtrant les données à l'aide d'un z-score
+
+```{r}
+# Initialize an empty dataframe to store the results
+results <- data.frame()
+
+data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+
+map_thresh <- c("P1-Tu-M1", "P1-Tu-M2", "P1-Tu-M3",
+                "P13-Tu-M3",
+                "P15-MeE-M1",
+                "P2-ES-M1", "P2-ES-M2", "P2-MuS-M1", "P2-MuS-M2", "P2-MaS-M1", "P2-MaS-M2", "P2-Tu-M1", "P2-Tu-M2", "P2-Tu-M3", "P2-Tu-M4", "P2-Tu-M5",
+"P20-Tu-M4", 
+"P3-ES-M1", "P3-MuS-M1", "P3-Tu-M1", "P3-Tu-M2",
+"P4-ES-M1", "P4-StT-M2",
+"P5-ES-M2")
+
+test_intra <- c()
+test_inter <- c()
+
+#fit a model with the Gaussian adaptative quadrature - node = 10
+#DE_IntraP_model <- glmer(Data ~ Tissu + (1 | Patient) + (1 | Map) + (1 | Map:Tissu), family = Gamma('log'), data = DE_filtered_data, nAGQ = 1)
+
+#Remove negative values from the dataframe
+filtered_data <- data_all %>%
+  filter(`Log Data` >= 0,
+  !Map %in% map_thresh)
+#DE_filtered_data <- filtered_data
+DE_filtered_data <- filtered_data %>%
+  filter(Tissu == "tumeur stroma")
+DE_filtered_data <- remove_outliers(df = DE_filtered_data, column_name = "Data", threshold = 3.5)[[1]]
+
+colnames(DE_filtered_data) <- c("Data", "Log Data", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation",
+                      "Composante.muci", "Emboles", "Infiltration.perinerveuse", "Stade", "KRAS", "NRAS",
+                      "RAS", "BRAF", "RAS.BRAF", "Microsatellite")
+
+DE_InterP_model <- glmmTMB(Data ~  Sexe + Stade + Composante.muci + Microsatellite + (1 | Map) + (1 | Patient),
+                         #family= tweedie(link='log'), data = DE_filtered_data)
+                         family = Gamma(link = 'log'), data = DE_filtered_data)
+
+DE_IntraP_model <- glmmTMB(Data ~  Sexe + Stade + Composante.muci + Microsatellite + Patient + (1 | Map),
+                         family = Gamma(link = 'log'), data = DE_filtered_data)
+
+simulationOutput <- simulateResiduals(fittedModel = DE_InterP_model, plot = T, quantreg=T)
+print(summary(DE_InterP_model))
+
+#QQ Plot + test
+plot(simulationOutput)
+
+#test outliers
+testOutliers(simulationOutput)
+
+#Residual vs predictor
+plotResiduals(simulationOutput, form = DE_filtered_data$Patient)
+testQuantiles(simulationOutput)
+
+#test dispersion
+testDispersion(simulationOutput, type = "DHARMa")
+
+#Heteroscedasticity means that there is a systematic dependency of the dispersion / variance on another variable in the model.
+testCategorical(simulationOutput, catPred =DE_filtered_data$Patient)
+
+print(testUniformity(simulationOutput))
+
+performance::check_model(DE_InterP_model)
+
+# Create a density plot with a different color per Patient
+ggplot(DE_filtered_data, aes(x = Data, fill = factor(Patient))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_discrete(name = "Patient") +
+  labs(x = "Young's modulus [Pa]", y = "Density")+ xlim(0,3000)
+```
+Autre tissu
+
+```{r}
+
+# Initialize an empty dataframe to store the results
+results <- data.frame()
+
+data_all <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data.xlsx")
+data_all_threshold <- read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/Data/all_data_threshold.xlsx")
+
+
+map_thresh <- c("P1-Tu-M1", "P1-Tu-M2", "P1-Tu-M3",
+                "P13-Tu-M3",
+                "P15-MeE-M1",
+                "P2-ES-M1", "P2-ES-M2", "P2-MuS-M1", "P2-MuS-M2", "P2-MaS-M1", "P2-MaS-M2", "P2-Tu-M1", "P2-Tu-M2", "P2-Tu-M3", "P2-Tu-M4", "P2-Tu-M5",
+"P20-Tu-M4", 
+"P3-ES-M1", "P3-MuS-M1", "P3-Tu-M1", "P3-Tu-M2",
+"P4-ES-M1", "P4-ES-M2", "P4-StT-M2",
+"P5-ES-M3", "P5-ES-M1")
+
+test_intra <- c()
+test_inter <- c()
+
+#fit a model with the Gaussian adaptative quadrature - node = 10
+#DE_IntraP_model <- glmer(Data ~ Tissu + (1 | Patient) + (1 | Map) + (1 | Map:Tissu), family = Gamma('log'), data = DE_filtered_data, nAGQ = 1)
+
+```
+
+```{r}
+perform_glm <- function(df, name, xlim) {
+  #Remove negative values from the dataframe
+  filtered_data <- df %>%
+    filter(`Log Data` >= 0)#,
+    #!Map %in% map_thresh)
+  filtered_data <- filtered_data %>%
+    filter(Tissu %in% name)
+  filtered_data <- remove_outliers(df = filtered_data, column_name = "Data", threshold = 2.5)[[1]]
+  
+  colnames(filtered_data) <- c("Data", "Log Data", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation",
+                        "Composante.muci", "Emboles", "Infiltration.perinerveuse", "Stade", "KRAS", "NRAS",
+                        "RAS", "BRAF", "RAS.BRAF", "Microsatellite")
+  
+  filtered_data$`Patient` <- paste0("Patient ", filtered_data$`Patient`)
+  
+  if (length(name) > 1){
+    base_model <- glmmTMB(Data ~ 1, family = Gamma(link = 'log'), data = filtered_data)
+    m2 <- update(base_model, . ~ Patient + Map , family = Gamma(link = 'log'), data = filtered_data)
+    m1 <- update(base_model, . ~ Patient , family = Gamma(link = 'log'), data = filtered_data)
+    print(anova(base_model,m1, m2)) ## sequent
+    InterP_model <- m2
+    #print(emmeans::joint_tests(InterP_model))
+    #IntraP_model <- glmmTMB(Data ~ Map, family = Gamma(link = 'log'), data = filtered_data)
+    #print(anova(base_model, IntraP_model, test="Chisq"))
+    #print(emmeans::joint_tests(InterP_model))
+  }
+  
+  else{
+    base_model <- glmmTMB(Data ~ 1, family = Gamma(link = 'log'), data = filtered_data)
+    m2 <- update(base_model, . ~ Patient + Map , family = Gamma(link = 'log'), data = filtered_data)
+    m1 <- update(base_model, . ~ Patient , family = Gamma(link = 'log'), data = filtered_data)
+    print(anova(base_model, m1, m2, test="Chisq"))
+    #print(emmeans::joint_tests(InterP_model))
+    InterP_model <- m2
+    #print(emmeans::joint_tests(InterP_model))
+    #InterP_model <- glmmTMB(Data ~ Sexe + Stade + Composante.muci + Microsatellite + Localisation + RAS.BRAF + (1|Patient)+(1|Patient:Map),
+    #                       family = Gamma(link = 'log'), data = filtered_data)
+  }
+  
+  simulationOutput <- simulateResiduals(fittedModel = InterP_model, plot = T, quantreg=T)
+  print(summary(InterP_model))
+  #QQ Plot + test
+  #plot(simulationOutput)
+  #test outliers
+  testOutliers(simulationOutput)
+  #Residual vs predictor
+  #plotResiduals(simulationOutput, form = filtered_data$Patient)
+  testQuantiles(simulationOutput)
+  #test dispersion
+  testDispersion(simulationOutput, type = "DHARMa")
+  #Heteroscedasticity means that there is a systematic dependency of the dispersion / variance on another variable in the model.
+  testCategorical(simulationOutput, catPred =filtered_data$Patient)
+  print(testUniformity(simulationOutput))
+  performance::check_model(InterP_model)
+  
+  # Create a density plot with a different color per Patient
+  g <- ggplot(filtered_data, aes(x = Data, fill = Map)) +
+    geom_density(alpha = 0.5) +
+    scale_fill_discrete(name = "Patient") +
+    labs(x = "Data", y = "Density")+ xlim(0,xlim)
+  print(g)
+  
+  # Create a new column with the number of unique MAPs per Patient
+  selected_df <- filtered_data %>%
+    group_by(Patient) %>%
+    mutate(num_MAP = n_distinct(Map)) %>%
+    ungroup()
+  
+  # Get the unique MAPs
+  unique_maps <- unique(selected_df$Map)
+  
+  # Create a list to store the geom_density layers
+  density_layers <- lapply(unique_maps, function(map) {
+    geom_density(data = subset(selected_df, Map == map), aes(x = Data, fill = paste(Patient, num_MAP, "MAPs")), alpha = 0.5)
+  })
+  
+  # Create the plot
+  g <- ggplot(selected_df, aes(x = Data, fill = paste(Patient, num_MAP, "MAPs"))) +
+    density_layers +
+    scale_fill_discrete(name = "Patient (number of MAPs)") +
+    labs(x = "Data", y = "Density") + xlim(0,xlim)
+  print(g)
+
+  # Create a list to store the geom_density layers
+  density_layers <- lapply(unique_maps, function(map) {
+    geom_density(data = subset(selected_df, Map == map), aes(x = Data, fill = Patient), alpha = 0.5)
+  })
+  
+  # Create the plot
+  ggplot(selected_df, aes(x = Data, fill = Patient)) +
+    density_layers +
+    scale_fill_discrete(name = "Patient") +
+    labs(x = "Young's modulus [Pa]", y = "Density") + xlim(0,xlim) +
+    facet_wrap(~ Patient) + 
+    theme(legend.position = "none")
+}
+```
+
+```{r}
+perform_glm(data_all, c("tumeur stroma"), xlim = 1500)
+```
+```{r}
+perform_glm(data_all_threshold, c("tissu_sain_proxi", "tissu_sain_proxi epithelium"), xlim = 250)
+```
+```{r}
+perform_glm(data_all_threshold, c("tumeur stroma", "tumeur epithelium", "tumeur"), xlim = 2000)
+```
+```{r}
+perform_glm(data_all_threshold, c("tumeur epithelium"), xlim = 500)
+```
+
+```{r}
+perform_glm(data_all_threshold, c("tissu_sain epithelium"), xlim = 100)
+```
+```{r}
+glm_comparison <- function(df, name, xlim){
+  #Remove negative values from the dataframe
+  filtered_data <- df %>%
+    filter(`Log Data` >= 0)
+  filtered_data <- filtered_data %>%
+    filter(Tissu %in% name )
+  filtered_data <- remove_outliers(df = filtered_data, column_name = "Data", threshold = 2.5)[[1]]
+  
+  colnames(filtered_data) <- c("Data", "Log Data", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation",
+                        "Composante.muci", "Emboles", "Infiltration.perinerveuse", "Stade", "KRAS", "NRAS",
+                        "RAS", "BRAF", "RAS.BRAF", "Microsatellite")
+  
+  filtered_data$`Patient` <- paste0("Patient ", filtered_data$`Patient`)
+  
+  # Construct the model
+  
+  null_model <- glmmTMB(Data ~ 1, family = Gamma(link = 'log'), data = filtered_data)
+    
+  model <- glmmTMB(Data ~ Tissu + (1 | Patient) + (1 | Map) + (1 | Tissu:Map), family = Gamma(link = 'log'), data = filtered_data)
+  
+  m1 <- glmmTMB(Data ~ Tissu + (1 | Patient) + (1 | Map), family = Gamma(link = 'log'), data = filtered_data)
+  
+  m2 <- glmmTMB(Data ~ Tissu + (1 | Patient), family = Gamma(link = 'log'), data = filtered_data)
+ 
+  m3 <- glmmTMB(Data ~ Tissu, family = Gamma(link = 'log'), data = filtered_data)
+  
+  #print("Comparison interaction:", anova(null_model, model, test = "LRT"))
+  #print("Comparison map:", anova(null_model, m1, test = "LRT"))
+  #print("Comparison patient:", anova(null_model, m2, test = "LRT"))
+  #print("Comparison Tissu:", anova(null_model, model, test = "LRT"))
+ 
+  print(anova(null_model,m3, m2, m1, model))
+  
+  # Print the summary of the model
+  print(summary(model))
+  
+  simulationOutput <- simulateResiduals(fittedModel = model, plot = T, quantreg=T)
+  
+  # Create a density plot with a different color per Patient
+  g <- ggplot(filtered_data, aes(x = Data, fill = Tissu)) +
+    geom_density(alpha = 0.5) +
+    scale_fill_discrete(name = "Patient") +
+    labs(x = "Young's Modulus [Pa]", y = "Density")+ xlim(0,xlim)
+  print(g)
+  
+  # Create a new column with the number of unique MAPs per Patient
+  selected_df <- filtered_data %>%
+    group_by(Patient) %>%
+    mutate(num_MAP = n_distinct(Map)) %>%
+    ungroup()
+  
+  # Get the unique MAPs
+  unique_maps <- unique(selected_df$Map)
+  
+  # Create a list to store the geom_density layers
+  density_layers <- lapply(unique_maps, function(map) {
+    geom_density(data = subset(selected_df, Map == map), aes(x = Data, fill = Tissu), alpha = 0.5)
+  })
+  
+  # Create the plot
+  ggplot(selected_df, aes(x = Data, fill = Tissu)) +
+    density_layers +
+    #scale_fill_discrete(name = "Patient") +
+    labs(x = "Young's Modulus [Pa]", y = "Density") + xlim(0,xlim) +
+    facet_wrap(~ Patient)
+}
+```
+
+Comparaison between proximal epithelium and distal epithelium
+
+```{r}
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium"), "Proximal epithelium", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain epithelium"), "Distal epithelium", Tissu))
+
+glm_comparison(df, c("Proximal epithelium", "Distal epithelium"), 500)
+```
+Comparison between normal epithelium (tissu_sain_proxi (epithelium) + tissu_sain) and tumoral epithelium
+
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur epithelium"), "Tumoral epithelium", Tissu))
+      
+glm_comparison(df, c("Normal epithelium", "Tumoral epithelium"),500)
+```
+
+Comparison between normal epithelium and stroma
+
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur stroma"), "Tumoral stroma", Tissu))
+      
+glm_comparison(df, c("Normal epithelium", "Tumoral stroma"),1000)
+```
+
+Comparison between normal epithelium and mixed structure (tumeur epith + stroma + ?)
+
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu))
+      
+glm_comparison(df, c("Normal epithelium", "Mixed"),1000)
+
+
+```
+
+Comparison between tumor epithelium and stroma 
+
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur stroma"), "Tumoral stroma", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur epithelium"), "Tumoral epithelium", Tissu))
+      
+glm_comparison(df, c("Tumoral epithelium", "Tumoral stroma"),1000)
+```
+
+Comparison between tumor epithelium and mixed 
+
+```{r}
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur epithelium"), "Tumoral epithelium", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu))
+      
+glm_comparison(df, c("Tumoral epithelium", "Mixed"),1000)
+
+```
+
+Comparison between stroma and Mixed
+
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur stroma"), "Tumoral stroma", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu))
+      
+glm_comparison(df, c("Tumoral stroma", "Mixed"),1000)
+
+```
+
+Tumor epith + Tumor Stroma vs Mixed 
+```{r}
+
+df <- data_all_threshold %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur stroma", "tumeur epithelium"), "T+S", Tissu))
+
+df <- df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu))
+
+view(df)
+      
+glm_comparison(df, c("T+S", "Mixed"), 1000)
+
+```
+GLMM with clinical data 
+
+```{r}
+#preprocessing
+
+df <- data_all_threshold %>%
+  filter(`Localisation` %in% c("Colon gauche", "Colon droit")) %>%
+  filter(`Tissu` %in% c("tumeur", "tumeur epithelium", "tumeur stroma"))
+
+colnames(df) <- c("Data", "Log Data", "Tissu", "Map", "Patient", "DDN", "Sexe", "DDD", "Prim", "Localisation",
+                        "Composante mucineuse", "Emboles", "Infiltration perinerveuse", "Stade", "KRAS", "NRAS",
+                        "RAS", "BRAF", "RAS+BRAF", "Microsatellite")
+df$`Patient` <- paste0("Patient ", df$`Patient`)
+
+df <- df %>%
+    filter(`Log Data` >= 0)
+df <- remove_outliers(df = df, column_name = "Data", threshold = 2)[[1]]
+
+# Convert the columns to Date type if they are not already
+df$DDN <- as.Date(df$DDN)
+df$`DDD` <- as.Date(df$`DDD`)
+
+# Calculate the minimum dates
+min_timestamp_DDN <- min(df$DDN, na.rm = TRUE)
+min_timestamp_DDD <- min(df$`DDD`, na.rm = TRUE)
+
+# Calculate the difference in days and replace the original columns
+df$Age <- as.numeric(df$DDD - df$DDN) / 365
+  
+df <- df %>%
+  mutate( BRAF = ifelse(BRAF == "NM", "NM", "muted"),
+         `RAS+BRAF` = ifelse(`RAS+BRAF` == "NM", "NM", "mutated"),
+         Stade = ifelse(Stade == "Stade III" | Stade == "Stade IV", "Stade III/IV", "Stade I/II"),
+         RAS = ifelse(RAS == "NM", "NM", "mutated"),
+         KRAS = ifelse(KRAS == "NM", "NM", "mutated"),
+         NRAS = ifelse(NRAS == "NM", "NM", "mutated"),
+         Tissu = ifelse(Tissu %in% c("tumeur, tumeur epithelium, tumeur stroma"), "Tumeur", "else"))
+
+clinical_model <- glmmTMB(`Data` ~ (1 | Patient) + (1 | Map) + (1 | Tissu:Map) + 
+                             Sexe
+                            + Age
+                            + Localisation 
+                            +Microsatellite 
+                            +`Infiltration perinerveuse`
+                            +NRAS
+                            +`RAS+BRAF`
+                            +`Composante mucineuse`
+                            +Stade
+                            +RAS 
+                            +Microsatellite
+                            +Emboles
+                            + KRAS
+                            + BRAF,
+                            ,
+  family = Gamma(link = 'log'), data = df)
+
+summary(clinical_model)
+
+simulationOutput <- simulateResiduals(fittedModel = clinical_model, plot = T, quantreg=T)
+
+# Tester en univarié /// Par exemple BRAF = f(Tissu, patient, Map) en régression logistique muté/non-muté 
+
+  # Create a density plot with a different color per Patient
+  g <- ggplot(df, aes(x = Data, fill = `Localisation`)) +
+    geom_density(alpha = 0.5) +
+    #scale_fill_discrete(name = "Patient") +
+    labs(x = "Data", y = "Density")+ xlim(0,1000)
+  print(g)
+  
+    # Create the plot
+  ggplot(df, aes(x = `Log Data`, fill = Stade)) +
+    geom_density(data = df, aes(x = `Log Data`, fill = Stade), alpha = 0.5) + 
+    labs(x = "Young's Modulus [Pa]", y = "Density") + xlim(0,10) +
+    facet_wrap(~ Patient)
+
+```
+```{r}
+#library(purrr)
+
+# Group by "Map" and calculate distances and differences
+#df_group <- df %>%
+#  group_by(Map)
+
+
+
+for (i in seq_along(file_paths)) {
+  summary_df <- data.frame()
+  df <- readxl::read_excel(file_paths[i])
+}
+
+# Initialize sum
+sum <- 0
+
+# Convert columns to numeric
+df <- df %>%
+  mutate(`X Position` = as.numeric(`X Position`),
+         `Y Position` = as.numeric(`Y Position`),
+         `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+
+median_val <- median(df$`Young's Modulus [Pa]`)
+mad <- mad(df$`Young's Modulus [Pa]`)
+
+# Calculate the modified Z-score
+df$modified_z_score <- 0.6745 * (df$`Young's Modulus [Pa]` - median_val) / mad
+
+# Identify and remove outliers based on the threshold
+outliers <- df[abs(df$modified_z_score) > 2.5, ]
+df_no_outliers <- df[abs(df$modified_z_score) <= 2.5, ]
+
+# Remove the temporary 'modified_z_score' column
+df <- df_no_outliers[, !(names(df_no_outliers) %in% c("modified_z_score"))]
+
+# Get the number of rows in the dataframe
+n <- nrow(df)
+
+# Loop over each row
+for (i in 1:n) {
+  # Compute the Euclidean distance for the i-th row and all other rows
+  distances <- unlist(lapply(1:n, function(j) sqrt((df$`X Position`[i] - df$`X Position`[j])^2 + (df$`Y Position`[i] - df$`Y Position`[j])^2)))
+  print(length(distances))
+  # Compute the weighted differences in Young's Modulus for the i-th row and all other rows
+  diff_Young <- unlist(lapply(1:n, function(j) {
+    if (distances[j] < 6e-6) {
+      weight <- 1
+    } else if (distances[j] >= 6e-6 & distances[j] < 11e-6) {
+      weight <- 0.5
+    } else if (distances[j] >= 11e-6) {
+      weight <- 0
+    }
+    return(weight * (abs(df$`Young's Modulus [Pa]`[i] - df$`Young's Modulus [Pa]`[j])))
+  }))
+  
+  # Add the sum of the weighted differences to the total sum
+  #print(paste(i, sum(diff_Young)))
+  sum <- sum + sum(diff_Young)
+}
+
+sum <- (1/(2*n))*sum
+```
+
+```{r}
+
+# Initialize list to store sums
+sum_list <- list()
+
+# Convert columns to numeric
+df <- df %>%
+  mutate(`X Position` = as.numeric(`X Position`),
+         `Y Position` = as.numeric(`Y Position`),
+         `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+
+# Get the unique maps
+maps <- unique(df$Map)
+
+# Loop over each map
+for (map in maps) {
+  # Subset the dataframe for the current map
+  df_map <- df[df$Map == map, ]
+  
+  # Get the number of rows in the subset dataframe
+  n <- nrow(df_map)
+  
+  # Initialize sum for the current map
+  sum <- 0
+  
+  # Loop over each row in the subset dataframe
+  for (i in 1:n) {
+    # Compute the Euclidean distance for the i-th row and all other rows
+    distances <- unlist(lapply(1:n, function(j) sqrt((df_map$`X Position`[i] + df_map$`Y Position`[i])^2 - (df_map$`X Position`[j] + df_map$`Y Position`[j])^2)))
+    
+    # Compute the weighted differences in Young's Modulus for the i-th row and all other rows
+    diff_Young <- unlist(lapply(1:n, function(j) {
+      if (distances[j] < 1) {
+        weight <- 1
+      } else if (distances[j] >= 1 & distances[j] < 2) {
+        weight <- 0.5
+      } else if (distances[j] >= THRESHOLD) {
+        weight <- 0
+      }
+      
+      return(weight * (df_map$`Young's Modulus [Pa]`[i] - df_map$`Young's Modulus [Pa]`[j]))
+    }))
+    
+    # Add the sum of the weighted differences to the total sum
+    sum <- sum + sum(diff_Young)
+  }
+  
+  # Store the sum for the current map in the list
+  sum_list[[map]] <- sum
+}
+
+# Print the list of sums
+print(sum_list)
+
+
+```
+
+```{r}
+test_df <- readxl::read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/all_data_distances.xlsx")
+# Get the unique maps
+tissus <- unique(test_df$Tissu)
+# Loop over each map
+
+test_df <- test_df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu)) %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu)) %>%
+  filter(`Tissu` %in% c("Normal epithelium", "Mixed", "tumeur stroma", "tumeur epithelium")) 
+
+tissus <- unique(test_df$Tissu)
+
+for (tissu in tissus) {
+  # Subset the dataframe for the current map
+  df_tissu <- test_df[test_df$Tissu == tissu, ]
+}
+  
+ggplot(test_df, aes(x = WeightedDistances, fill = Tissu)) +
+    geom_density(alpha = 0.2) +
+    labs(
+         x = "Scaled Local Heterogeneity Score (LHS)",
+         y = "Density") +
+    xlim(0,1)
+
+```
+```{r}
+library(sp)
+
+df <- readxl::read_excel("/Users/gauthier.gadouas/Desktop/Projet AFM/all_data_distances.xlsx")
+
+# Convert columns to numeric
+df <- df %>%
+  mutate(`X Position` = as.numeric(`X Position`),
+         `Y Position` = as.numeric(`Y Position`),
+         `Data` = as.numeric(`Data`))
+
+# Initialize an empty dataframe to store results
+global_result_df <- data.frame(Tissu = character(),
+                        Map = character(),
+                        GlobalMoranI = numeric(),
+                        stringsAsFactors = FALSE)
+
+local_result_df <- data.frame(Tissu = character(),
+                        Map = character(),
+                        LocalMoranI = numeric(),
+                        stringsAsFactors = FALSE)
+
+# Get the unique maps
+maps <- unique(df$Map)
+
+# Loop over each map
+for (map in maps) {
+  # Subset the dataframe for the current map
+  df_map <- df[df$Map == map, ]
+  coords <- df_map[, c("X Position", "Y Position")]
+  sp_points <- sp::SpatialPoints(coords)
+  dist_matrix <- as.matrix(dist(coords))
+  moran_I <- ape::Moran.I(df_map$`Data`, dist_matrix, na.rm=TRUE)
+  cat("Global Moran's I:", moran_I$observed, "\n")
+  
+  print('Data' %in% colnames(df_map))
+  local_moran <- localmoran(df_map$Data, listw = nb2listw(knn2nb(knearneigh(sp_points, k = 8))), zero.policy=TRUE)
+  cat("Local Moran's indices: \n")
+  print(c(local_moran[,"Ii"]))
+  
+  # Append results to result_df
+  global_result_df <- rbind(global_result_df, data.frame(Tissu = unique(df_map$Tissu),
+                                             Map = map,
+                                             GlobalMoranI = moran_I$observed,
+                                             stringsAsFactors = FALSE))
+  
+  local_result_df <- rbind(local_result_df, data.frame(Tissu = rep(unique(df_map$Tissu), each = length(c(local_moran[,"Ii"]))),
+                                             Map = rep(map, each = length(c(local_moran[,"Ii"]))),
+                                             LocalMoranI = c(local_moran[,"Ii"]),
+                                             stringsAsFactors = FALSE))
+}
+  
+
+
+# Create a boxplot for global_moran_I with boxes per "Tissu"
+ggplot(global_result_df, aes(x=Tissu, y=GlobalMoranI)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title="Global Moran I per Tissu type", x="Tissu", y="Moran I")
+
+# Create a violin plot for local_moran_I with violin per "Tissu"
+ggplot(local_result_df, aes(x=Tissu, y=LocalMoranI)) + 
+  geom_violin() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title="Local Moran I per Tissu type", x="Tissu", y="Local Moran I")
+
+local_result_df <- local_result_df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu)) %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu)) %>%
+  filter(`Tissu` %in% c("Normal epithelium", "Mixed", "tumeur stroma", "tumeur epithelium"))
+
+global_result_df <- global_result_df %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tissu_sain_proxi", "tissu_sain_proxi epithelium", "tissu_sain epithelium"), "Normal epithelium", Tissu)) %>%
+  mutate(Tissu = ifelse(Tissu %in% c("tumeur"), "Mixed", Tissu)) %>%
+  filter(`Tissu` %in% c("Normal epithelium", "Mixed", "tumeur stroma", "tumeur epithelium"))
+
+# Create a boxplot for global_moran_I with boxes per "Tissu"
+ggplot(global_result_df, aes(x=Tissu, y=GlobalMoranI)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title="Global Moran I per Tissu type", x="Tissu", y="Moran I")
+
+# Create a violin plot for local_moran_I with violin per "Tissu"
+ggplot(local_result_df, aes(x=Tissu, y=LocalMoranI)) + 
+  geom_violin() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title="Local Moran I per Tissu type", x="Tissu", y="Local Moran I")
+
+  
+```

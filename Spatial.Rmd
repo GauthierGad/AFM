@@ -1,0 +1,687 @@
+```{r}
+
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+#TO DO: LOOP OVER EVERY FILE 
+#Out of the loop: initialize list mean average distance of neigbours 
+avg_distance_map = list()
+
+data <- read_excel(file_paths[1])
+subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+           `Y Position` = as.numeric(`Y Position`))
+
+q_size <-1e-5
+
+#Define window
+Wnd <- owin(c(-3e-5, 3e-5), c(-3e-5, 3e-5))
+
+numeric_df <- subset_data %>%
+  select_if(is.numeric)
+
+ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+summary(ppp)
+
+nx <- 6
+ny <- 6
+
+plot(ppp)
+plot(quadratcount(ppp), nx = nx, ny = ny)
+plot(density(ppp), sigma = 0.075)
+ppp_neighbours <- nndist(ppp)
+ggplot(data = data.frame(dist = ppp_neighbours), 
+       aes(dist)) + 
+  geom_histogram(binwidth = 1e-6)
+
+ppp %mark% (ppp_neighbours) %>%
+  plot(markscale = 1, main = "Stienen diagram")
+
+
+#get average distance of nearest neighbours 
+avg_distance_map <- append(avg_distance_map, mean(ppp_neighbours))
+
+unique_maps <- unique(data$`Map`)
+
+map_plots <- list()
+
+q_size <-1e-5
+
+#Define window
+Wnd <- owin(c(-25e-6, 25e-6), c(-25e-6, 25e-6))
+
+numeric_df <- subset_data %>%
+  select_if(is.numeric)
+
+ppp <- as.ppp(numeric_df, Wnd)
+summary(ppp)
+
+for (map in unique_maps) {
+  subset_data <- data[data$Map == map, ]
+  subset_data <- subset_data %>%
+    mutate(`X Position` = as.numeric(`X Position`))
+    mutate(`X Position` = as.numeric(`Y Position`))
+  ppp <- as.ppp(subset_data, Wnd)
+  summary(ppp)
+  plot <- ggplot() +
+    geom_bin2d(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`),
+             binwidth = c(q_size, 
+                          q_size)) +
+    geom_point(data = subset_data, 
+               aes(x = `X Position`, 
+                 y = `Y Position`)) +
+    scale_fill_distiller(palette = "RdBu") +
+    coord_fixed() + 
+    xlim(c(-2.25e-5, 2.25e-5)) +
+    ylim(c(-2.25e-5, 2.25e-5)) 
+  map_plots[[map]] <- plot
+}
+```
+
+```{r}
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+  
+data <- read_excel(file_paths[86])
+subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+           `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]`= as.numeric(`Young's Modulus [Pa]`))
+
+q_size <-1e-5
+
+#Define window
+Wnd <- owin(c(-30e-6, 30e-6), c(-30e-6, 30e-6))
+
+numeric_df <- subset_data %>%
+  select_if(is.numeric)
+
+ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+#summary(ppp)
+
+nx <- 6
+ny <- 6
+plot(ppp)
+
+test <- quadratcount(ppp, nx = nx, ny = ny)
+plot(test)
+mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+colnames(test) <- rev(center_quadrat)
+rownames(test) <- center_quadrat
+test <- as.data.frame(test)
+
+plot <- ggplot() +
+  geom_bin2d(data = test,
+             aes(x = x,
+                 y = y),
+             binwidth = c(q_size, 
+                          q_size)) +
+  geom_point(data = test,
+             aes(x = x,
+               y = y)) +
+  scale_size_continuous(
+    range = c(3, 10),
+    breaks = seq(min(test$Freq), max(test$Freq), by=1)
+  ) +  # Adjust the size range as needed
+  labs(title = "Scatterplot with Size Based on Freq",
+       x = "X-axis Label",
+       y = "Y-axis Label")
+
+plot <- ggplot() +
+  geom_bin2d(data = numeric_df,
+             aes(x = `X Position`, 
+                 y = `Y Position`),
+             binwidth = c(q_size, 
+                          q_size)) +
+    geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`)) +
+  labs(x = "X (m)",
+       y = "Y (m)") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+  coord_fixed() + 
+    xlim(c(-3.25e-5, 3.25e-5)) +
+    ylim(c(-3.25e-5, 3.25e-5))
+plot
+ggsave("count_.svg", plot)
+
+plot <- ggplot() +
+  geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`,
+                 color = `Young's Modulus [Pa]`,
+                 size = q_size)) +
+  scale_color_distiller(palette = "Blues", 
+                       direction = 1) + 
+  scale_size_continuous(range = c(25,q_size), guide = FALSE)
+plot
+ggsave("YM_.svg", plot)
+```
+TEST AVEC LOOP
+
+```{r}
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+nx <- 6
+ny <- 6
+
+plot_map <- list()
+plot_frequency <- list()
+plot_density <- list()
+avg_distance_map <- list()
+
+
+for (file_path in file_paths) {
+  data <- read_excel(file_path)
+  subset_data <- data %>%
+      mutate(`X Position` = as.numeric(`X Position`),
+             `Y Position` = as.numeric(`Y Position`))
+  
+  q_size <-1e-5
+  
+  #Define window
+  Wnd <- owin(c(-30e-6, 30e-6), c(-30e-6, 30e-6))
+  
+  numeric_df <- subset_data %>%
+    select_if(is.numeric)
+  
+  ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+  #summary(ppp)
+  plot(ppp)
+  ppp_neighbours <- nndist(ppp)
+
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  plot(test)
+  mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+  center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  # plot the count maps 
+  plot_1 <- ggplot() +
+    geom_bin2d(data = test,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = test,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  
+  # Plot the frequencies maps
+  plot_2 <- ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = `X Position`, 
+                   y = `Y Position`),
+               binwidth = c(q_size, 
+                            q_size)) +
+      geom_point(data = subset_data,
+               aes(x = `X Position`, 
+                   y = `Y Position`)) +
+    scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+    coord_fixed() + 
+      xlim(c(-3.25e-5, 3.25e-5)) +
+      ylim(c(-3.25e-5, 3.25e-5))
+  
+  # Plot the density maps 
+  plot_3 <- plot(density(ppp), sigma = bw.diggle) #0.075)
+  
+  #get average distance of nearest neighbours 
+  avg_distance_map <- append(avg_distance_map, mean(ppp_neighbours))
+  #return list of plots
+  plot_map[length(plot_map) + 1] <- plot_1
+  plot_density[length(plot_density) + 1]
+  #plot_frequency <- append(plot_frequency, plot_2)
+  #plot_density <- append(plot_density, plot_3)
+}
+```
+
+CORRIGER LE PROBLEME DE LA SAUVEGARDE DE PLOTS DANS LES LISTES R
+
+```{r}
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+  
+data <- read_excel(file_paths[86])
+subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+           `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]`= as.numeric(`Young's Modulus [Pa]`))
+
+q_size <-1e-5
+
+#Define window
+Wnd <- owin(c(-30e-6, 30e-6), c(-30e-6, 30e-6))
+
+numeric_df <- subset_data %>%
+  select_if(is.numeric)
+
+ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+#summary(ppp)
+
+nx <- 6
+ny <- 6
+plot(ppp)
+
+test <- quadratcount(ppp, nx = nx, ny = ny)
+plot(test)
+mid <- ((abs(-25e-6) + 25e-6)/nx) / 2
+center_quadrat <- -seq(from= -25e-6 + mid, to = 25e-6 - mid , length.out = nx)
+colnames(test) <- rev(center_quadrat)
+rownames(test) <- center_quadrat
+test <- as.data.frame(test)
+
+plot <- ggplot() +
+  geom_bin2d(data = test,
+             aes(x = x,
+                 y = y),
+             binwidth = c(q_size, 
+                          q_size)) +
+  geom_point(data = test,
+             aes(x = x,
+               y = y)) +
+  scale_size_continuous(
+    range = c(3, 10),
+    breaks = seq(min(test$Freq), max(test$Freq), by=1)
+  ) +  # Adjust the size range as needed
+  labs(title = "Scatterplot with Size Based on Freq",
+       x = "X-axis Label",
+       y = "Y-axis Label")
+
+plot <- ggplot() +
+  geom_bin2d(data = numeric_df,
+             aes(x = `X Position`, 
+                 y = `Y Position`),
+             binwidth = c(q_size, 
+                          q_size)) +
+    geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`)) +
+  labs(x = "X (m)",
+       y = "Y (m)") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1, limits = c(1,4)) +
+  coord_fixed() + 
+    xlim(c(-3.25e-5, 3.25e-5)) +
+    ylim(c(-3.25e-5, 3.25e-5))
+plot
+ggsave("count_.svg", plot)
+
+plot <- ggplot() +
+  geom_point(data = subset_data,
+             aes(x = `X Position`, 
+                 y = `Y Position`,
+                 color = `Young's Modulus [Pa]`,
+                 size = q_size)) +
+  scale_color_distiller(palette = "Blues", 
+                       direction = 1) + 
+  scale_size_continuous(range = c(25,q_size), guide = FALSE)
+plot
+ggsave("YM_.svg", plot)
+```
+
+PREPROCESSING + histogramme with original data
+
+```{r}
+library(isdas)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+library(dplyr)
+
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data/"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+nx <- 6
+ny <- 6
+
+plot_map <- list()
+plot_frequency <- list()
+plot_density <- list()
+avg_distance_map <- c()
+
+for (i in seq_along(file_paths)) {
+  summary_df <- data.frame()
+  data <- read_excel(file_paths[i])
+  data <- data %>%
+    select(-which(duplicated(colnames(data))))
+  subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+            `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+  subset_data <- subset_data %>%
+    filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+  subset_data <- subset_data %>%
+    filter(`X Position` > -32e-6, `X Position` < 32e6, `Y Position` > -32e-6, `Y Position` < 32e-6)
+  group_summary <- subset_data %>%
+      group_by(`X Position`, `Y Position`) %>%
+      summarize(MYoung = mean(`Young's Modulus [Pa]`), .groups='drop') %>%
+      ungroup()
+  summary_df <- bind_rows(summary_df, group_summary)
+  print(summary_df)
+  
+ # subset_data <- subset_data %>% distinct(`X Position`, `Y Position`), .keep_all = TRUE)
+#print(subset_data)
+  
+  q_size <- 1e-5
+  
+  #Define window
+  Wnd <- owin(c(-32e-6, 32e-6), c(-32e-6, 32e-6))
+  
+  numeric_df <- summary_df %>%
+    select_if(is.numeric)
+  
+  ppp <- as.ppp(numeric_df[, c(1,2)], Wnd)
+  #summary(ppp)
+  #plot(ppp)
+  ppp_neighbours <- nndist(ppp, k=1)
+
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  #plot(test)
+  mid <- ((abs(-32e-6) + 32e-6)/nx) / 2
+  center_quadrat <- -seq(from= -32e-6 + mid, to = 32e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  plot_map[[i]] <- local({
+    i <- i
+    plot_1 <- ggplot() +
+    geom_bin2d(data = summary_df,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = summary_df,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  plot_frequency[[i]] <- local({
+    i <- i
+    plot_2 <- ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = summary_df,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  # Plot the density maps
+  plot_density[[i]] <- local({
+    i <- i 
+    plot_3 <- plot(distmap(ppp), sigma = bw.diggle) #0.075)
+  })
+  #get average distance of nearest neighbours 
+  #avg_distance_map <- append(avg_distance_map, mean(ppp_neighbours))
+  avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+}
+  #return list of plots
+  #plot_map[length(plot_map) + 1] <- plot_1
+  #plot_density[length(plot_density) + 1] <- plot_2
+  #plot_density <- append(plot_density, plot_3)
+
+t <- data.frame(avg_distance_map * 1e6)  
+h <- ggplot(t, aes(x = t$avg_distance_map)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 fill = "gray",
+                 color = "black",
+                 breaks = seq(min(t$avg_distance_map) - 1 , max(t$avg_distance_map) + 1, by = 0.65)) +
+  geom_density(aes(y= after_stat(density))) +
+  labs(title = "Histogram",
+       x = "Averaged neighbours distance",
+       y = "Density") +
+  theme_minimal()
+
+print(h)
+```
+
+Test without preprocessing - duplicate in data can be present 
+
+```{r}
+path <- "/Users/gauthier.gadouas/Desktop/Projet AFM/Data/Original_data/"
+
+# Initialize lists to store file paths and filenames
+file_paths <- character(0)
+file_names <- character(0)
+
+# Recursively find Excel files with "map" in their name
+excel_files <- list.files(path, pattern = ".*map.*\\.xlsx$", full.names = TRUE, recursive = TRUE)
+
+# Iterate over the Excel files and gather paths and filenames
+for (path_to_file in excel_files) {
+  file_paths <- c(file_paths, path_to_file)
+  file_names <- c(file_names, basename(path_to_file))
+}
+
+nx <- 6
+ny <- 6
+
+plot_map <- list()
+plot_frequency <- list()
+plot_density <- list()
+avg_distance_map <- c()
+
+for (i in seq_along(file_paths)) {
+  summary_df <- data.frame()
+  data <- read_excel(file_paths[i])
+  data <- data %>%
+    select(-which(duplicated(colnames(data))))
+  subset_data <- data %>%
+    mutate(`X Position` = as.numeric(`X Position`),
+            `Y Position` = as.numeric(`Y Position`),
+           `Young's Modulus [Pa]` = as.numeric(`Young's Modulus [Pa]`))
+  subset_data <- subset_data %>%
+    filter(!is.na(subset_data$`Young's Modulus [Pa]`)) 
+  subset_data <- subset_data %>%
+    filter(`X Position` > -32e-6, `X Position` < 32e6, `Y Position` > -32e-6, `Y Position` < 32e-6)
+  
+  q_size <- 1e-5
+  
+  #Define window
+  Wnd <- owin(c(-32e-6, 32e-6), c(-32e-6, 32e-6))
+  
+  numeric_df <- subset_data %>%
+    select_if(is.numeric)
+  print(numeric_df)
+  
+  ppp <- as.ppp(numeric_df[, c(2,3)], Wnd)
+  #summary(ppp)
+  #plot(ppp)
+  ppp_neighbours <- nndist(ppp, k=3)
+
+  test <- quadratcount(ppp, nx = nx, ny = ny)
+  #plot(test)
+  mid <- ((abs(-32e-6) + 32e-6)/nx) / 2
+  center_quadrat <- -seq(from= -32e-6 + mid, to = 32e-6 - mid , length.out = nx)
+  colnames(test) <- rev(center_quadrat)
+  rownames(test) <- center_quadrat
+  test <- as.data.frame(test)
+  
+  plot_map[[i]] <- local({
+    i <- i
+    plot_1 <- ggplot() +
+    geom_bin2d(data = subset_data,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = summary_df,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  plot_frequency[[i]] <- local({
+    i <- i
+    plot_2 <- ggplot() +
+    geom_bin2d(data = numeric_df,
+               aes(x = x,
+                   y = y),
+               binwidth = c(q_size, 
+                            q_size)) +
+    geom_point(data = subset_data,
+               aes(x = x,
+                 y = y)) +
+    scale_size_continuous(
+      range = c(3, 10),
+      breaks = seq(min(test$Freq), max(test$Freq), by=1)
+    ) +  # Adjust the size range as needed
+    labs(title = "Scatterplot with Size Based on Freq",
+         x = "X-axis Label",
+         y = "Y-axis Label",
+         size = "count")
+  })
+  
+  # Plot the density maps
+  plot_density[[i]] <- local({
+    i <- i 
+    plot_3 <- plot(distmap(ppp), sigma = bw.diggle) #0.075)
+  })
+  #get average distance of nearest neighbours 
+  #avg_distance_map <- append(avg_distance_map, mean(ppp_neighbours))
+  avg_distance_map <- append(avg_distance_map, mean(distmap(ppp)))
+}
+  #return list of plots
+  #plot_map[length(plot_map) + 1] <- plot_1
+  #plot_density[length(plot_density) + 1] <- plot_2
+  #plot_density <- append(plot_density, plot_3)
+
+t <- data.frame(avg_distance_map * 1e6)  
+h <- ggplot(t, aes(x = t$avg_distance_map)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 fill = "gray",
+                 color = "black",
+                 breaks = seq(0 , max(t$avg_distance_map) + 1, by = 0.65)) +
+  geom_density(aes(y= after_stat(density))) +
+  labs(title = "Histogram",
+       x = "Averaged neighbours distance",
+       y = "Density") +
+  theme_minimal()
+
+print(h)
+```
+
